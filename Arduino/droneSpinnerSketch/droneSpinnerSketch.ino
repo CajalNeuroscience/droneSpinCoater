@@ -11,6 +11,7 @@ Menu controlled as pages, designated with 'page' variable. Values:
 2 - First menu (select program)
 3 - Edit values for free-run period
 4 - End program action
+5 - Sleep page when idle
 
 Logo is splash screen at boot only.
 
@@ -37,6 +38,9 @@ Rotary encoder rotation changes value or selection point.
 
 Pushbutton is for immediate stop of program, proceeding immediately to End program action. 
 
+Will go into idle sleep mode when no buttons pushed or no program ends for 
+timeToSleep*sleepDivider cycles of main loop. 
+
  **************************************************************************/
 
 #include <SPI.h>
@@ -47,20 +51,16 @@ Pushbutton is for immediate stop of program, proceeding immediately to End progr
 #include <Fonts/FreeMono9pt7b.h>
 #include <Fonts/FreeSans18pt7b.h>
 #include <Fonts/FreeSans12pt7b.h>
-#include <Fonts/FreeSans9pt7b.h>
-
 #include <RotaryEncoder.h>
-
 #include <Servo.h>
 
 // Setup a RotaryEncoder with 2 steps per latch for the 2 signal input pins:
 RotaryEncoder encoder(A2, A3, RotaryEncoder::LatchMode::TWO03);
 
-#define buttonPin 2
+#define buttonPin 3
 #define LEDpin 9
 #define motorPin 11
-#define encoderPin 3
-
+#define encoderPin 2
 
 Servo motor;  // create servo object to control the motor
 
@@ -68,6 +68,35 @@ Servo motor;  // create servo object to control the motor
 const unsigned int menuCursor[4][2] = {{1, 9}, {1, 23}, {1, 37}, {1, 51}};
 const unsigned int editCursor[9][2] = {{5, 25}, {18, 25}, {32, 25}, {44, 25}, {6, 55}, {19, 55}, {37, 55}, {52, 55}, {114, 23}};
 
+// Sleep constants
+// Change timeToSleep or sleepDivider to change delay into sleep mode
+const unsigned long timeToSleep = 400;
+const int sleepDivider = 10;
+
+// Constants for programs names. 
+// Currently supports single-step protocols, but future work can have more complex curves
+const char programNames[4] [15] = {{"Free run"}, {"3k x 1 min"}, {"5k x 59 min"}, {"1k x 59 min"}}; // Display name in menu
+const int programTimes[4] = {3540, 60, 3540, 3540}; // Seconds
+const int programSpeed[4] = {2500, 3000, 5000, 1000}; // RPM
+
+// Constants for max speed (RPM) and max time (seconds) for a program in Free run mode
+const int minMaxSpeed[2] = {0, 8000};
+const int minMaxTime[2] = {0, 5999};
+
+// Initial values for Free Run mode rotor speed and time 
+volatile int rotorSet = 1000;
+volatile int timeSet = 25;
+
+// Motor speed constants
+const unsigned int motorKV = 1700; // KV value of motor (nominal)
+const unsigned int supplyVoltage = 5; // Supply voltage
+const unsigned int rotorKickStart = 400; // Motor doesn't seem to turn at less than ~900 rpm, so give it a start
+const unsigned int speedStep = 100; // Increment of RPM on each loop. Proxy for accelleration.
+
+
+
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
+// Cursor volatiles
 volatile unsigned int cursorRow = 0;
 volatile unsigned int cursorCol = 0;
 volatile int cursorLocX = 0;
@@ -76,12 +105,10 @@ volatile int numOfCursorSpots = 0;
 volatile int cursorSpot = 0;
 volatile int stopTime = 0;
 
+// Sleep volatiles
 unsigned long sleepTimer = 0;
-unsigned long timeToSleep = 400;
-int sleepDivider = 10;
 int sleepDivTick = 0;
 bool firstTimeThrough;
-
 
 volatile int holdSpot = 0;
 
@@ -94,13 +121,6 @@ short cursorState = 1; // 0 = select Active
                        // 2 = select > symbol for main menu program select
 bool editCursorActive = false;
 bool selectCursorActive = true;
-
-char programNames[4] [15] = {{"Free run"}, {"3k x 1 min"}, {"5k x 59 min"}, {"1k x 59 min"}};
-int programTimes[4] = {3540, 60, 3540, 3540};
-int programSpeed[4] = {2500, 3000, 5000, 1000};
-
-const int minMaxSpeed[2] = {0, 8000};
-const int minMaxTime[2] = {0, 5999};
 
 const unsigned int debounceTime = 50;
 char dispString[5];
@@ -123,10 +143,9 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 #define LOGO_WIDTH   128
 
 volatile bool displayInvert = true;
-volatile int rotorSet = 1000;
-volatile unsigned int rotorSpeed = 1000;
 const unsigned int initSpeed = 0;
-volatile int timeSet = 25;
+
+volatile unsigned int rotorSpeed = rotorSet;
 volatile unsigned int timeElapsed = 0;
 volatile long timeOfSequence = 0;
 volatile byte sequenceStep = 0;
@@ -144,16 +163,11 @@ int page = 0;
 int holdPage = 0;
 int lastPage = 0;
 
-const unsigned int motorKV = 1700;
-const unsigned int supplyVoltage = 5;
-const unsigned int rotorKickStart = 400; // Motor doesn't seem to turn at less than ~900 rpm 
-const unsigned int speedStep = 100; // Increment of RPM on each loop. ~accelleration
 const unsigned int speedStepDivider = 1; // divisor of loop ticks -> speed steps
 int speedStepCounter = 0;
 int speedSign = 1;
 const unsigned int motorSpeed = motorKV*supplyVoltage;
 int outVal = 0;
-
 
 void setup() {
 
@@ -166,7 +180,8 @@ void setup() {
 
   PCICR |= (1 << PCIE1);    // This enables Pin Change Interrupt 1 that covers the Analog input pins or Port C.
   PCMSK1 |= (1 << PCINT10) | (1 << PCINT11);  // This enables the interrupt for pin 2 and 3 of Port C.
-  
+
+  // Attach interrupts for buttons
   attachInterrupt(digitalPinToInterrupt(encoderPin), encoderPush, RISING);
   attachInterrupt(digitalPinToInterrupt(buttonPin), buttonPush, RISING);
   
@@ -174,9 +189,11 @@ void setup() {
 
   drawLogo();    // Draw a small bitmap image
 
+  // Attach motor
   motor.attach(motorPin, 1000, 2000);  // attaches the servo on pin 11 to the servo object
   motor.write(initSpeed);
-  
+
+  // Set up menu for the first time
   page = 2;
   moveCursor();
   setCursorState();
@@ -202,6 +219,8 @@ void loop() {
       // Check time
       timeElapsed = (millis() - startTime)/1000;
 
+      // Each loop through, increment speedStepCounter.
+      // If greater than speedStepDivider, change speed by speedStep
       speedStepCounter++;
       if (speedStepCounter > speedStepDivider) {
         rotorSpeed = rotorSpeed + (speedSign*speedStep);
@@ -211,9 +230,10 @@ void loop() {
         else if (rotorSpeed < minMaxSpeed[0]){
           rotorSpeed = rotorKickStart;
         }
-      speedStepCounter = 0;
+        speedStepCounter = 0;
       }
 
+      // Write current speed value to motor
       outVal = map(rotorSpeed, 0, motorSpeed, 0, 180);
       motor.write(outVal);  
     
@@ -223,8 +243,9 @@ void loop() {
     }
   }
 
-
+  // If device is idle, go into sleep mode
   if (sleepTimer > timeToSleep){
+    // Sleep timer has elapsed
     if (firstTimeThrough){
       holdPage = page;
       firstTimeThrough = false;
@@ -233,6 +254,7 @@ void loop() {
     page = 5;
   }
   else{
+    // Normal operation when not in sleep mode
     firstTimeThrough = true;
     if (page < 5){
       holdPage = page;
@@ -240,12 +262,11 @@ void loop() {
   }
   sleepDivTick++;
 
+  // Reset sleep timer
   if (sleepDivTick > sleepDivider){
     sleepDivTick = 0;
     sleepTimer++;
   }
-
-
 
 
   // Move encoder without taking up too many interrupts?
@@ -348,7 +369,6 @@ void startRotor(){
 
 void stopRotor(){
   // Function to stop rotor spinning 
-//  stopTime = millis();
   
   digitalWrite(LEDpin, LOW);
 
@@ -364,6 +384,9 @@ void stopRotor(){
 }
 
 void moveCursor(){
+  // Move position of cursor on screen. 
+  // Arrays defined above set positions possible.
+  // Position will stop at end points if driven past end point
     cursorSpot = (cursorSpot + (int) encoder.getDirection());
 
     switch (page){
@@ -389,6 +412,7 @@ void moveCursor(){
 }
 
 void correctCursor(){
+  // Change cursor value to enforce end points
     if (cursorSpot >= numOfCursorSpots){
       cursorSpot = numOfCursorSpots - 1;
     }
@@ -398,7 +422,7 @@ void correctCursor(){
 }
 
 void editDigit() {
-  //
+  // Use encoder to change value of speed or time in Free Run menu
   unsigned int addIn = 1;
   switch (cursorSpot)
     {
@@ -469,7 +493,8 @@ void editDigit() {
 
 
 void setCursorState(){
-
+  // Set status of state variables for cursor
+  // Click of encoder wheel cycles through states on page = 3
   switch (page) {
     case 0:
       // Logo page
@@ -527,7 +552,8 @@ void setCursorState(){
 
 void encoderPush() 
 // Push button on encoder. 
-// Select, given context
+// Cycle through edit/move modes on page = 3
+// Normal behavior is select item indicated by cursor
 
 {
    static unsigned long encoder_last_interrupt_time = 0;
@@ -555,6 +581,7 @@ void encoderPush()
             startRotor();
           }
           else {
+            // Toggle cursor state and maybe select digit to edit
             setCursorState();
           }
           
@@ -613,24 +640,11 @@ void buttonPush(){
 
 }
 
-    /*
-     last_interrupt_time = 0;
-     interrupt_time = millis();
-     // If interrupts come faster than 200ms, assume it's a bounce and ignore
-     if (interrupt_time - last_interrupt_time > debounceTime)
-      {
-        stopRotor();
-      }
-  last_interrupt_time = interrupt_time;
- }
-}
-
-*/
-
 void drawMainDisplay() {
 /* Main screen of device to show on loop
  * Has speed, timeElapsed/timeSet/totalTimeOfSequence and 
  * which step of protocol displayed
+ * Page = 1
 */
   display.clearDisplay();
 
@@ -660,6 +674,8 @@ void drawMainDisplay() {
 }
 
 void drawLogo(void) {
+  // Draw logo defined in variable logo_bmp
+  // Page = 0
   display.clearDisplay();
 
   display.drawBitmap(
@@ -671,6 +687,7 @@ void drawLogo(void) {
 
 void drawFirstMenu(void) {
   // Draw program selection page
+  // Page = 2
   display.clearDisplay();
   display.setFont();
   display.setTextSize(1); 
@@ -684,6 +701,8 @@ void drawFirstMenu(void) {
   display.setCursor(cursorLocX, cursorLocY);
   display.println(cursorChar);
 
+// Uncomment below to include numeral of current sleepTimer value
+// Useful to set values for timeToSleep
   //display.setCursor(100, 20);
  // display.println(sleepTimer);
 
@@ -697,6 +716,7 @@ void drawFirstMenu(void) {
 
 void drawValueEditPage() {
   // Draw page to edit time and speed values
+  // Page = 4
   display.clearDisplay();
 
   // RPM
@@ -755,13 +775,15 @@ void drawValueEditPage() {
 
 void drawProgramEndPage() {
   // Draw page to alert end of program
-
+  // Page = 4
   // Flash display to acknowledge button press
   display.invertDisplay(true);
   delay(400);
   display.invertDisplay(false);
 
   /*
+  // Show 'Program end' on blank screen.
+  // Useful for troubleshooting
   display.clearDisplay();
   display.setFont();
   display.setCursor(10, 10);
@@ -779,8 +801,12 @@ void drawProgramEndPage() {
 }
 
 void drawSleepPage() {
+  // Draw page for sleep mode
+  // Set here to display logo as in boot page
+  // Page = 5
   display.clearDisplay();
 
+// Comment this block to make sleep page a blank screen
   display.drawBitmap(    
     (display.width()  - LOGO_WIDTH ) / 2,
     (display.height() - LOGO_HEIGHT) / 2,
