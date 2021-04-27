@@ -1,8 +1,7 @@
 /**************************************************************************
- This is an example for our Monochrome OLEDs based on SSD1306 drivers
-
- Pick one up today in the adafruit shop!
- ------> http://www.adafruit.com/category/63_98
+Sketch for droneCoater 
+Compact spin coater based on a hollow-shafted drone motor
+Sketch drives motor and OLED menu
 
 Menu controlled as pages, designated with 'page' variable. Values:
 
@@ -387,7 +386,7 @@ void moveCursor(){
   // Move position of cursor on screen. 
   // Arrays defined above set positions possible.
   // Position will stop at end points if driven past end point
-    cursorSpot = (cursorSpot + (int) encoder.getDirection());
+    cursorSpot = (cursorSpot - (int) encoder.getDirection());
 
     switch (page){
       case 2:
