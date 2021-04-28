@@ -39,6 +39,13 @@ https://www.amazon.com/gp/product/B071GRSFBD
 
 Motor and ESC can be substituted with another unit, but key features are a hollow spindle, small size, and low speed. It's a good idea to measure the current draw of your motor on a bench power supply before committing to a secondary supply to drive the motor.  The current draw goes up considerably under even a small load. 
 
+### Vacuum source:
+
+With a good seal on the vacuum chuck a typical lab bench vacuum supply is more than enough to hold a coverslip in place.  With the specified arbor and larger O ring in place a #1.5 (0.17 mm) coverslip an unfiltered lab vacuum supply causes the coverslip to flex a mm or more.  If using a weak vacuum the O ring should provide a better seal, but in my tests the 3D printed chuck alone was plenty of seal and more support (less flex) compared to the O ring.  
+
+Proper vacuum form is to put a trap between the source and the outside world.  This is especially good practice with a spin coater since there will be plenty of times your solution gets sucked into the vacuum line.  There's a small trap built in to the acrylic design here but a larger one (or at least a backup filter) is not a bad idea if using a plumbed-in line or building supply.  Don't make someone have to come replace pipes that turn out to be coated in strata of dried up PVA, but go ahead and wreck your modified aquarium pump if you want. 
+
+With that said, just about any vacuum source would likely work.  The flow rate of the pump needs to exceed the inflow rate around the seal, which with a good seal is very small.  Higher flow rates with a given seal will achieve a good hold and max vacuum more quickly. 
 
 ### ToDo:
 
