@@ -11,6 +11,8 @@ ESC.  Also brake should be in OFF state to avoid jerk at the end of a spin.
 ESC needs throttle calibrated at start. Should start with throttle at max, power on 
 ESC, drop to min, wait for confirmation from ESC, then power down.
 
+https://www.rcelectricparts.com/esc-user-guide.html
+
 Directions to calibrate:
 0. With assembled DroneCoater control module and a drone motor...
 1. Upload this sketch to Arduino via USB.
